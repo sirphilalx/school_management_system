@@ -1,17 +1,17 @@
-from rest_framework import generics, permissions
+from django.http import Http404
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.authtoken.views import ObtainAuthToken
 from rest_framework.authtoken.models import Token
 from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from django.contrib.auth import get_user_model
-from .serializers import UserRegistrationSerializer, UserProfileSerializer, PasswordChangeSerializer, ProfileSerializer, TeacherRegistrationSerializer, StudentRegistrationSerializer, AdminRegistrationSerializer, ClassSerializer, CustomUserSerializer
+from .serializers import UserRegistrationSerializer,StudentListSerializer, SubjectSerializer, ClassSerializer, UserProfileSerializer, PasswordChangeSerializer, ProfileSerializer, TeacherRegistrationSerializer, StudentRegistrationSerializer, AdminRegistrationSerializer, ClassSerializer, CustomUserSerializer, StudentClassUpdateSerializer, StudentDetailSerializer
 from django.contrib.auth.tokens import default_token_generator
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
-from .models import Profile, CustomUser, Class
-from rest_framework import status, generics
-from .permissions import IsAdminUser, IsTeacherUser, IsStudentUser
+from .models import Profile, CustomUser, Class, Subject
+from .permissions import IsAdminUser, IsTeacherUser, IsStudentUser, IsAdminOrTeacherUser
 from rest_framework.decorators import api_view
 
 User = CustomUser
@@ -23,10 +23,18 @@ User = CustomUser
 #     permission_classes = [permissions.AllowAny]
 
 
+# class ClassCreateUpdateView(generics.CreateAPIView, generics.UpdateAPIView):
+#     queryset = Class.objects.all()
+#     serializer_class = ClassSerializer
+#     permission_classes = [IsAdminUser]
+
 class ClassCreateView(generics.CreateAPIView):
     queryset = Class.objects.all()
     serializer_class = ClassSerializer
     permission_classes = [IsAdminUser] 
+
+    def perform_create(self, serializer):
+        serializer.save()
 
 class ClassListView(generics.ListAPIView):
     queryset = Class.objects.all()
@@ -39,14 +47,99 @@ class ClassDetailView(generics.RetrieveAPIView):
     permission_classes = [permissions.IsAuthenticated] 
 
 class ClassUpdateView(generics.UpdateAPIView):
+    # queryset = Class.objects.all()
+    # serializer_class = ClassSerializer
+    # permission_classes = [IsAdminUser]  
+
+    # def perform_update(self, serializer):
+    #     serializer.save()
+
     queryset = Class.objects.all()
     serializer_class = ClassSerializer
-    permission_classes = [IsAdminUser]  
+    permission_classes = [IsAdminUser]
+
+    def patch(self, request, *args, **kwargs):
+        return self.partial_update(request, *args, **kwargs)
 
 class ClassDeleteView(generics.DestroyAPIView):
     queryset = Class.objects.all()
     serializer_class = ClassSerializer
     permission_classes = [IsAdminUser] 
+
+class SubjectListCreateView(APIView):
+    permission_classes = [IsAdminUser]
+
+
+    def get(self, request):
+        subjects = Subject.objects.all()
+        serializer = SubjectSerializer(subjects, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = SubjectSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+class SubjectDetailView(APIView):
+    def get_object(self, pk):
+        try:
+            return Subject.objects.get(pk=pk)
+        except Subject.DoesNotExist:
+            raise Http404
+    
+    def get(self, request, pk):
+        subject = self.get_object(pk)
+        serializer = SubjectSerializer(subject)
+        return Response(serializer.data)
+
+    def put(self, request, pk):
+        subject = self.get_object(pk)
+        serializer = SubjectSerializer(subject, data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    def delete(self, request, pk):
+        subject = self.get_object(pk)
+        subject.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class StudentDetailView(generics.RetrieveUpdateAPIView):
+    queryset = CustomUser.objects.filter(role='student')  # Ensure we only deal with students
+    serializer_class = StudentDetailSerializer
+    lookup_field = 'id'  # Assuming you lookup by student ID
+
+    def get(self, request, *args, **kwargs):
+        """Retrieve the specified student's details."""
+        return self.retrieve(request, *args, **kwargs)
+
+    def put(self, request, *args, **kwargs):
+        """Update the specified student's details."""
+        return self.update(request, *args, **kwargs)
+
+    def patch(self, request, *args, **kwargs):
+        """Partially update the specified student's details."""
+        return self.partial_update(request, *args, **kwargs)
+
+    def update(self, request, *args, **kwargs):
+        """Override update to include custom logic if needed."""
+        partial = kwargs.pop('partial', False)
+        instance = self.get_object()
+        serializer = self.get_serializer(instance, data=request.data, partial=partial)
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        if getattr(instance, '_prefetched_objects_cache', None):
+            # If 'prefetch_related' has been applied to a queryset, we need to forcibly
+            # invalidate the prefetch cache on the instance.
+            instance._prefetched_objects_cache = {}
+
+        return Response(serializer.data)
 
 class RegisterTeacherView(generics.CreateAPIView):
     serializer_class = TeacherRegistrationSerializer
@@ -60,11 +153,22 @@ class TeacherListView(generics.ListAPIView):
         return CustomUser.objects.filter(role='teacher')
 
 class StudentListView(generics.ListAPIView):
-    serializer_class = CustomUserSerializer
+    queryset = CustomUser.objects.filter(role='student')
+    serializer_class = StudentListSerializer
     permission_classes = [IsAdminUser]
 
     def get_queryset(self):
         return CustomUser.objects.filter(role='student')
+
+class StudentDetailView(generics.RetrieveAPIView):
+    queryset = CustomUser.objects.filter(role='student')
+    serializer_class = CustomUserSerializer
+    permission_classes = [permissions.AllowAny]
+
+class StudentUpdateView(generics.UpdateAPIView):
+    queryset = CustomUser.objects.filter(role='student')
+    serializer_class = StudentDetailSerializer
+    permission_classes = [IsAdminOrTeacherUser]
 
 class RegisterStudentView(generics.CreateAPIView):
     serializer_class = StudentRegistrationSerializer
@@ -87,8 +191,6 @@ class CustomObtainAuthToken(ObtainAuthToken):
             'email': user.email,
             'role': user.role
         })
-
-
 
 # Logout View
 class LogoutView(APIView):
